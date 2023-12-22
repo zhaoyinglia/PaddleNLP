@@ -19,6 +19,7 @@ import paddle
 import paddle.base.core as core
 import paddle.nn as nn
 from paddle.distributed.fleet import auto
+from paddle.distributed.auto_parallel.static.utils import print_program_with_dist_attr
 from paddle.profiler import SummaryView
 
 try:
@@ -172,24 +173,39 @@ class AutoEngine(BasicEngine):
         eval_finished_step = 0
 
         self._auto_engine.prepare(mode="train")
+        # print_program_with_dist_attr(self._auto_engine.main_program, self._auto_engine.dist_context)
 
         for step, batch in enumerate(train_data_loader):
             if epoch_index == self._load_recovery["epoch"]:
                 if step < self._load_recovery["step"]:
                     continue
 
-
             fetch_list = None
             if self._strategy.amp.enable:
                 # fetch_list = ["find_infinite_scale.tmp_0", "loss_scaling_0"]
                 fetch_list = []
 
+            # fetch_list = ['tmp_8', 'embedding_0.w_0@recv_0']
+
             final_loss = None
             if use_new_executor():
                 batches = self._validate_batch(batch)
                 for micro_batch in batches:
+                    # for name, data in micro_batch.items():
+                    #     print("name:", name)
+                    #     print("data:", np.array(data))
                     with paddle.profiler.utils._nvprof_range(iter_id=step, start=self.nvprof_start, end=self.nvprof_end):
                         outs = self._auto_engine.run(micro_batch, fetch_list=fetch_list, mode="train")
+                    # print("="*30)
+                    # for name, param in self._auto_engine.main_program.state_dict(mode="param").items():
+                    #     print("param_name:", name)
+                    #     print("param_value:", np.array(param))
+                    # print("="*30)
+                    # for name, value in outs["fetches"].items():
+                    #     print("fetch_name:", name)
+                    #     print("fetch_value:", value)
+                    # print("="*30)
+
                     # pp: some devices don't have loss in outs
                     if "loss" in outs:
                         if final_loss is None:
@@ -509,9 +525,13 @@ class AutoEngine(BasicEngine):
     def tune(self, tune_dataset=None):
         self._auto_engine._tune(tune_dataset, tune_sample_split=tune_dataset.sample_split, batch_size=self.batch_size)
 
-    def save(self, training=True):
+    def save(self, epoch, step, training=True):
         if self._output_dir and isinstance(self._output_dir, str):
-            path = os.path.join(self._output_dir, "auto")
+            output_dir = os.path.join(self._output_dir, "epoch_%d_step_%d" % (epoch, step))
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+            logger.info("Save model to %s" % output_dir)
+            path = os.path.join(output_dir, "auto")
             self._auto_engine.save(path, training=training)
         else:
             raise TypeError("`save` requires a valid value of `output_dir`.")
